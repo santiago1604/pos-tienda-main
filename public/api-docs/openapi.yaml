@@ -1,0 +1,671 @@
+openapi: 3.0.3
+
+info:
+  title: StoreCell API
+  description: |
+    API REST del sistema de punto de venta **StoreCell**.
+    Permite gestionar productos, ventas, reparaciones, categorías y estadísticas.
+
+    ## Autenticación
+    Usa **Bearer Token** (Laravel Sanctum).
+    1. Llama a `POST /api/auth/login` con tus credenciales.
+    2. Recibe un `token` en la respuesta.
+    3. Inclúyelo en todas las peticiones protegidas:
+       ```
+       Authorization: Bearer <token>
+       ```
+
+    ## Roles
+    | Rol         | Permisos |
+    |-------------|----------|
+    | `admin`     | Acceso total |
+    | `seller`    | Ventas, reparaciones, pedidos |
+    | `technician`| Solo reparaciones asignadas |
+
+  version: "1.0.0"
+  contact:
+    name: Equipo StoreCell
+    email: dev@storecell.com
+
+servers:
+  - url: http://localhost:8000/api
+    description: Servidor de desarrollo local
+  - url: https://storecell.com/api
+    description: Servidor de producción
+
+tags:
+  - name: Auth
+    description: Autenticación y gestión de sesión
+  - name: Products
+    description: Catálogo de productos e inventario
+  - name: Categories
+    description: Categorías de productos
+  - name: Sales
+    description: Registro y consulta de ventas
+  - name: Repairs
+    description: Gestión de reparaciones de equipos
+  - name: Dashboard
+    description: Estadísticas y reportes (solo admin)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Sanctum
+
+  schemas:
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: OK
+        data:
+          type: object
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Error de validación
+        errors:
+          type: object
+
+    PaginatedMeta:
+      type: object
+      properties:
+        current_page:
+          type: integer
+        last_page:
+          type: integer
+        per_page:
+          type: integer
+        total:
+          type: integer
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [admin, seller, technician]
+        blocked:
+          type: boolean
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: integer
+        category_id:
+          type: integer
+        description:
+          type: string
+        stock_qty:
+          type: integer
+        unit_cost:
+          type: number
+        sale_price:
+          type: number
+        barcode:
+          type: string
+          nullable: true
+        category:
+          $ref: '#/components/schemas/Category'
+
+    Category:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+
+    Sale:
+      type: object
+      properties:
+        id:
+          type: integer
+        sale_number:
+          type: string
+        total:
+          type: number
+        payment_cash:
+          type: number
+        payment_virtual:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/User'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SaleItem'
+
+    SaleItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        product_id:
+          type: integer
+        quantity:
+          type: integer
+        unit_price:
+          type: number
+        subtotal:
+          type: number
+
+    Repair:
+      type: object
+      properties:
+        id:
+          type: integer
+        customer_name:
+          type: string
+        customer_phone:
+          type: string
+          nullable: true
+        device_description:
+          type: string
+        problem_description:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [pending, in_progress, completed, delivered]
+        total_cost:
+          type: number
+          nullable: true
+        is_warranty:
+          type: boolean
+        delivered_at:
+          type: string
+          format: date-time
+          nullable: true
+
+security:
+  - bearerAuth: []
+
+paths:
+
+  # ── AUTH ──────────────────────────────────────────────────────────────────
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Iniciar sesión
+      description: Devuelve un Bearer token válido por 8 horas.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: admin@storecell.com
+                password:
+                  type: string
+                  example: secret
+      responses:
+        "200":
+          description: Login exitoso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          token:
+                            type: string
+                            example: "1|abc123xyz..."
+                          token_type:
+                            type: string
+                            example: Bearer
+                          expires_in:
+                            type: integer
+                            example: 28800
+                          user:
+                            $ref: '#/components/schemas/User'
+        "401":
+          description: Credenciales inválidas
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Cerrar sesión (revocar token)
+      responses:
+        "200":
+          description: Token revocado
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Datos del usuario autenticado
+      responses:
+        "200":
+          description: Datos del usuario
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/User'
+
+  # ── PRODUCTS ──────────────────────────────────────────────────────────────
+
+  /products:
+    get:
+      tags: [Products]
+      summary: Listar productos
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: Buscar por descripción o código de barras
+        - name: category
+          in: query
+          schema:
+            type: integer
+          description: Filtrar por ID de categoría
+        - name: stock
+          in: query
+          schema:
+            type: integer
+          description: Mostrar productos con stock ≤ valor
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Lista paginada de productos
+
+    post:
+      tags: [Products]
+      summary: Crear producto (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category_id, description, stock_qty, unit_cost, sale_price]
+              properties:
+                category_id:
+                  type: integer
+                description:
+                  type: string
+                stock_qty:
+                  type: integer
+                unit_cost:
+                  type: number
+                sale_price:
+                  type: number
+                barcode:
+                  type: string
+      responses:
+        "201":
+          description: Producto creado
+
+  /products/low-stock:
+    get:
+      tags: [Products]
+      summary: Productos con stock crítico (0 o ≤ 2 unidades)
+      responses:
+        "200":
+          description: Listas de productos sin stock y con stock bajo
+
+  /products/{id}:
+    get:
+      tags: [Products]
+      summary: Detalle de un producto
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Producto encontrado
+        "404":
+          description: No encontrado
+
+    put:
+      tags: [Products]
+      summary: Actualizar producto (admin)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Product'
+      responses:
+        "200":
+          description: Producto actualizado
+
+    delete:
+      tags: [Products]
+      summary: Eliminar producto (admin)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Producto eliminado
+
+  # ── CATEGORIES ────────────────────────────────────────────────────────────
+
+  /categories:
+    get:
+      tags: [Categories]
+      summary: Listar categorías
+      responses:
+        "200":
+          description: Lista de categorías
+
+    post:
+      tags: [Categories]
+      summary: Crear categoría (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        "201":
+          description: Categoría creada
+
+  /categories/{id}:
+    put:
+      tags: [Categories]
+      summary: Actualizar categoría (admin)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+      responses:
+        "200":
+          description: Categoría actualizada
+
+    delete:
+      tags: [Categories]
+      summary: Eliminar categoría (admin)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Categoría eliminada
+
+  # ── SALES ─────────────────────────────────────────────────────────────────
+
+  /sales:
+    get:
+      tags: [Sales]
+      summary: Listar ventas
+      parameters:
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Filtrar por fecha (defecto hoy)
+        - name: user_id
+          in: query
+          schema:
+            type: integer
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Lista paginada de ventas
+
+  /sales/summary:
+    get:
+      tags: [Sales]
+      summary: Resumen del día (totales por método de pago)
+      responses:
+        "200":
+          description: Totales de ventas del día
+
+  /sales/{id}:
+    get:
+      tags: [Sales]
+      summary: Detalle de una venta con sus ítems
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Venta encontrada
+        "404":
+          description: No encontrada
+
+    delete:
+      tags: [Sales]
+      summary: Eliminar venta y reponer stock (admin)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Venta eliminada y stock repuesto
+
+  # ── REPAIRS ───────────────────────────────────────────────────────────────
+
+  /repairs:
+    get:
+      tags: [Repairs]
+      summary: Listar reparaciones
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, in_progress, completed, delivered]
+        - name: technician_id
+          in: query
+          schema:
+            type: integer
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Lista paginada de reparaciones
+
+    post:
+      tags: [Repairs]
+      summary: Registrar nueva reparación
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [customer_name, device_description]
+              properties:
+                customer_name:
+                  type: string
+                customer_phone:
+                  type: string
+                device_description:
+                  type: string
+                problem_description:
+                  type: string
+      responses:
+        "201":
+          description: Reparación registrada
+
+  /repairs/{id}:
+    get:
+      tags: [Repairs]
+      summary: Detalle de una reparación
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reparación encontrada
+        "404":
+          description: No encontrada
+
+    delete:
+      tags: [Repairs]
+      summary: Eliminar reparación (admin)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reparación eliminada
+
+  /repairs/{id}/status:
+    patch:
+      tags: [Repairs]
+      summary: Cambiar estado de una reparación
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [pending, in_progress, completed, delivered]
+                technician_id:
+                  type: integer
+                total_cost:
+                  type: number
+                repair_description:
+                  type: string
+      responses:
+        "200":
+          description: Estado actualizado
+
+  # ── DASHBOARD ─────────────────────────────────────────────────────────────
+
+  /dashboard/summary:
+    get:
+      tags: [Dashboard]
+      summary: Resumen de ventas por periodo (admin)
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [today, week, month, custom]
+            default: today
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Estadísticas del periodo
+
+  /dashboard/top-products:
+    get:
+      tags: [Dashboard]
+      summary: Top 10 productos más vendidos del mes (admin)
+      responses:
+        "200":
+          description: Ranking de productos
+
+  /dashboard/cash-session:
+    get:
+      tags: [Dashboard]
+      summary: Estado de la sesión de caja activa (admin)
+      responses:
+        "200":
+          description: Totales de la caja actual
