@@ -1,0 +1,9 @@
+﻿vendor/
+node_modules/
+/.env
+storage/framework/sessions/*
+storage/framework/cache/*
+storage/framework/views/*
+storage/logs/*
+*.sqlite
+.DS_Store
